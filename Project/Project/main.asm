@@ -1,281 +1,375 @@
 /* **************************************************
- *           COMP2121 19T2 Assessment               *
- *           ** Monorail Emulator **                *
+ *           COMP2121 19T2 Assessment               * 
+ *           ** Monorail Emulator **                *  
  *           Created: 16 August 2019                *
- *    Author : Andy Lu(z       ), Hao Sun(z5158176) *
+ *    Author : Andy Lu(z       ), Hao Sun(z5158176) * 
  * **************************************************
 */
 .include "m2560def.inc"
 
-.def temp = r16
-.def row = r17
-.def col = r18
-.def mask = r19
-.def temp2 = r20
-.def Timertemp  = r26
+.def zero = r2
+.def one = r3
+.def cursorPos = r4
 
-; .def low byte of time counter in Timer0  = r24
-; .def high byte of time counter in Timer0 = r25
+.def tempMain = r25
+.def tempSec = r24
 
+/*===========VALUE DECLARATIONS===========*/
 
 .equ LCD_RS = 7
-.equ LCE_E  = 6
+.equ LCD_E = 6
 .equ LCD_RW = 5
-.equ LCE_BE = 4
-.equ PORTLDIR = 0xF0
-.equ INITCOLMASK = 0xEF
-.equ INITROWMASK = 0x01
-.equ ROWMASK = 0x0F
+.equ LCD_BE = 4
 
-.macro clear
-    ldi YL, low(@0)                         ; load the memory address to Y pointer
-    ldi YH, high(@0)
-    clr temp                                ; set temp to 0
-    st Y+, temp                             ; clear the two bytes at @0 in SRAM
-    st Y, temp
+// interrupt total = 16,000,000 / (256 * prescalar)
+.equ intTotal = 6250 ; for 0.1s
+
+;.equ RPS0 = 0
+;.equ RPS20 = 20
+;.equ RPS40 = 42
+;.equ RPS60 = 83
+;.equ RPS80 = 132
+;.equ RPS100 = 255
+
+/*===========DATA SEGMENT===========*/
+
+.dseg
+
+.org 0x200
+stationNames: .byte 100
+travelTimes: .byte 10
+stopTime: .byte 1
+
+
+
+/*===========CODE SEGMENT===========*/
+
+.cseg
+
+testData: .dw "1234567890" ; 26 char
+inValid: .dw "Invalid, please try again." ; 26 char
+iniSNum: .dw "Please type the maximum number of stations" ; 42 char
+iniSName: .dw "Pleas type the name of station" ; 30 char
+iniSTravel1: .dw "The time from Station" ; 21 char
+iniSTravel2: .dw "to Station" ; 10 char
+iniSStop: .dw "The stop time of the monorail at any station is" ; 47 char
+iniFin: .dw "Now the configuration is complete. Please wait 5 seconds" ; 56 char
+
+.org 0x0
+jmp reset
+
+.org INT0addr
+;jmp buttonRight
+
+.org INT1addr
+;jmp buttonLeft
+
+.org INT3addr
+;jmp laserReceiver
+
+.org OVF0addr
+;jmp Timer0OVF
+
+
+/*===========DELAY MACRO===========*/
+
+.macro delay
+
+	clr tempMain
+	clr tempSec
+
+	ldi tempMain, high(@0)
+	ldi tempSec, low(@0)
+
+	delayLoop:
+		sub tempSec, one
+		sbc tempMain, zero
+
+		push tempMain
+		push tempSec
+
+		ldi tempMain, 0x0A
+		ldi tempSec, 0x6B
+
+		subDelayLoop:
+			sub tempSec, one
+			sbc tempMain,zero
+			cp tempSec, zero
+			cpc tempMain, zero
+			brne subDelayLoop
+
+		pop tempSec
+		pop tempMain
+
+		cp tempMain, zero
+		cpc tempSec, zero
+		brne delayLoop
 .endmacro
+
+/*===========BLINK MACRO===========*/
+
+.macro blink
+	ldi tempMain, 0xff ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 250
+	ldi tempMain, 0 ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 250
+	ldi tempMain, 0xff ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 250
+	ldi tempMain, 0 ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 250
+.endmacro
+
+/*===========QUICK BLINK MACRO===========*/
+
+.macro quickBlink
+	ldi tempMain, 0xff ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 100
+	ldi tempMain, 0 ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 100
+	ldi tempMain, 0xff ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 100
+	ldi tempMain, 0 ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 100
+	ldi tempMain, 0xff ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 100
+	ldi tempMain, 0 ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 100
+	ldi tempMain, 0xff ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 100
+	ldi tempMain, 0 ;;;;;;;;;;;;;
+	out PORTC, tempMain
+	delay 100
+.endmacro
+
+/*===========PRESET LCD COMMANDS===========*/
+
 
 .macro do_lcd_command
-    ldi r16, @0
-    rcall dnammoc_dcl
-    rcall lcd_wait
+	ldi tempMain, @0
+	call lcd_command
+	call lcd_wait
 .endmacro
 
-.macro do_lcd_data                          ; this macro helps print a letter on the display
-    ldi r16, @0
-    rcall lcd_data
-    rcall lcd_wait
+.macro do_lcd_data
+	mov tempMain, @0
+	call lcd_data
+	call lcd_wait
 .endmacro
 
 .macro lcd_set
-    sbi PORTA, @0
+	sbi PORTA, @0
 .endmacro
 
 .macro lcd_clr
-    cbi PORTA, @0
+	cbi PORTA, @0
 .endmacro
 
-.dseg
-    nameList: .byte 100                     ; stores 10 stations' name, 10 bytes ea
-    timeList: .byte 10                      ; stores 10 stop time, 1 byte ea
-    timeCounter: .byte 2                    ; time counter in Timer0
-
-.cseg
-    jmp RESET
-
-/* initialize */
-RESET:
-    ldi r16, low(RAMEND)
-    out SPL, r16
-    ldi r16, high(RAMEND)
-    out SPH, r16
-    ldi temp, PORTLDIR                      ; columns are outputs, rows are inputs
-    STS DDRL, temp                          ; cannot use out
-    ser temp
-    out DDRC, temp                          ; Make PORTC all outputs
-    out PORTC, temp                         ; Turn on all the LEDs
-    ser temp
-    out DDRF, temp
-    out DDRA, temp
-    clr temp
-    out PORTF, temp
-    out PORTA, temp
-
-    do_lcd_command 0b00111000               ; 2x5x7
-    rcall sleep_5ms
-    do_lcd_command 0b00111000               ; 2x5x7
-    rcall sleep_1ms
-    do_lcd_command 0b00111000               ; 2x5x7
-    do_lcd_command 0b00111000               ; 2x5x7
-    do_lcd_command 0b00001000               ; display off?
-    do_lcd_command 0b00000001               ; clear display
-    do_lcd_command 0b00000110               ; increment, no display shift
-    do_lcd_command 0b00001110               ; Cursor on, bar, no blink
-
-/* input the number of stops and their names */
-do_lcd_command 0b00000001                   ; clear display
-do_lcd_data 'N'                             ; print "NO OF STATIONS:" on screen
-do_lcd_data 'O'
-do_lcd_data ' '
-do_lcd_data 'O'
-do_lcd_data 'F'
-do_lcd_data ' '
-do_lcd_data 'S'
-do_lcd_data 'T'
-do_lcd_data 'S'
-do_lcd_data 'T'
-do_lcd_data 'I'
-do_lcd_data 'O'
-do_lcd_data 'N'
-do_lcd_data 'S'
-do_lcd_data ':'
+lcd_command:
+	out PORTF, tempMain
+	nop
+	lcd_set LCD_E
+	nop
+	nop
+	nop
+	lcd_clr LCD_E
+	nop
+	nop
+	nop
 ret
 
-/* set the travel time */
-do_lcd_command 0b00000001
-
-/* set the stop time */
-
-/* main function: keeps scanning the keypad to find which key is pressed. */
-main:
-    ldi mask, INITCOLMASK                   ; initial column mask
-    clr col                                 ; initial column
-    colloop:
-    STS PORTL, mask                         ; set column to mask value
-                                            ; (sets column 0 off)
-    ldi temp, 0xFF                          ; implement a delay so the
-                                            ; hardware can stabilize
-    delay:
-    dec temp
-    brne delay
-    LDS temp, PINL                          ; read PORTL. Cannot use in
-    andi temp, ROWMASK                      ; read only the row bits
-    cpi temp, 0xF                           ; check if any rows are grounded
-    breq nextcol                            ; if not go to the next column
-    ldi mask, INITROWMASK                   ; initialise row check
-    clr row                                 ; initial row
-    rowloop:
-    mov temp2, temp
-    and temp2, mask                         ; check masked bit
-    brne skipconv                           ; if the result is non-zero,
-                                            ; we need to look again
-    rcall convert                           ; if bit is clear, convert the bitcode
-    jmp main                                ; and start again
-    skipconv:
-    inc row                                 ; else move to the next row
-    lsl mask                                ; shift the mask to the next bit
-    jmp rowloop
-    nextcol:
-    cpi col, 3                              ; check if we are on the last column
-    breq main                               ; if so, no buttons were pushed,
-                                            ; so start again.
-
-    sec                                     ; else shift the column mask:
-                                            ; We must set the carry bit
-    rol mask                                ; and then rotate left by a bit,
-                                            ; shifting the carry into
-                                            ; bit zero. We need this to make
-                                            ; sure all the rows have
-                                            ; pull-up resistors
-    inc col                                 ; increment column value
-    jmp colloop                             ; and check the next column
-                                            ; convert function converts the row and column given to a
-                                            ; binary number and also outputs the value to PORTC.
-                                            ; Inputs come from registers row and col and output is in
-                                            ; temp.
-    convert:
-    cpi col, 3                              ; if column is 3 we have a letter
-    breq letters
-    cpi row, 3                              ; if row is 3 we have a symbol or 0
-    breq symbols
-    mov temp, row                           ; otherwise we have a number (1-9)
-    lsl temp                                ; temp = row * 2
-    add temp, row                           ; temp = row * 3
-    add temp, col                           ; add the column address
-                                            ; to get the offset from 1
-    inc temp                                ; add 1. Value of switch is
-                                            ; row*3 + col + 1.
-
-
-Timer0OVF:                                  ; Timer0 overflow
-    in Timertemp, SREG
-    push Timertemp
-    push YH
-    push YL
-    push r25
-    push r24
-    lds  r24, timerCounter
-    lds  r25, timerCounter + 1
-    adiw r25:r24, 1
-
-lcd_command:
-    out PORTF, r16
-    nop
-    lcd_set LCD_E
-    nop
-    nop
-    nop
-    lcd_clr LCD_E
-    nop
-    nop
-    nop
-    ret
-
 lcd_data:
-    out PORTF, r16
-    lcd_set LCD_RS
-    nop
-    nop
-    nop
-    lcd_set LCD_E
-    nop
-    nop
-    nop
-    lcd_clr LCD_E
-    nop
-    nop
-    nop
-    lcd_clr LCD_RS
-    ret
+	out PORTF, tempMain
+	lcd_set LCD_RS
+	nop
+	nop
+	nop
+	lcd_set LCD_E
+	nop
+	nop
+	nop
+	lcd_clr LCD_E
+	nop
+	nop
+	nop
+	lcd_clr LCD_RS
+ret
 
 lcd_wait:
-    push r16
-    clr r16
-    out DDRF, r16
-    out PORTF, r16
-    lcd_set LCD_RW
+	push tempMain
+	clr tempMain
+	out DDRF, tempMain
+	out PORTF, tempMain
+	lcd_set LCD_RW
 
 lcd_wait_loop:
+	nop
+	lcd_set LCD_E
+	nop
+	nop
     nop
-    lcd_set LCD_E
-    nop
-    nop
-    nop
-    in r16, PINF
-    lcd_clr LCD_E
-    sbrc r16, 7
-    rjmp lcd_wait_loop
-    lcd_clr LCD_RW
-    ser r16
-    out DDRF, r16
-    pop r16
-    ret
+	in tempMain, PINF
+	lcd_clr LCD_E
+	sbrc tempMain, 7
+	jmp lcd_wait_loop
+	lcd_clr LCD_RW
+	ser tempMain
+	out DDRF, tempMain
+	pop tempMain
+ret
 
-.equ F_CPU = 16000000
-.equ DELAY_1MS = F_CPU / 4 / 1000 - 4
+/*===========CLEAR DISPLAY MACRO===========*/
 
-sleep_1ms:
-    push r24
-    push r25
-    ldi r25, high(DELAY_1MS)
-    ldi r24, low(DELAY_1MS)
+.macro clearDisplay
+	do_lcd_command 0b00000001 ; clear display
+	clr cursorPos
+.endmacro
 
-delayloop_1ms:
-    sbiw r25:r24, 1
-    brne delayloop_1ms
-    pop r25
-    pop r24
-    ret
+/*===========DISPLAY UPDATE MACRO===========*/
 
-sleep_5ms:
-    rcall sleep_1ms
-    rcall sleep_1ms
-    rcall sleep_1ms
-    rcall sleep_1ms
-    rcall sleep_1ms
-    ret
+.macro updateDisplay
+	push tempMain
+	ldi tempMain, 16
+	cp cursorPos, tempMain
+	pop tempMain
+	brne skipClear
+	clearDisplay
+	skipClear:
 
-sleep_20ms:
-    rcall sleep_5ms
-    rcall sleep_5ms
-    rcall sleep_5ms
-    rcall sleep_5ms
-    ret
+	do_lcd_data @0
+	inc cursorPos
+.endmacro
 
-sleep_100ms:
-    rcall sleep_20ms
-    rcall sleep_20ms
-    rcall sleep_20ms
-    rcall sleep_20ms
-    rcall sleep_20ms
-    ret
+/*===========DISPLAY UPDATE WITH ASCII MACRO===========*/
+
+.macro updateDisplayWithASCII
+	ldi tempMain, 16
+	cp cursorPos, tempMain
+	brne skipClear
+	clearDisplay
+	skipClear:
+
+	ldi tempMain, @0
+	do_lcd_data tempMain
+	inc cursorPos
+.endmacro
+
+/*===========RESET SUBROUTINE===========*/
+
+reset:
+	ldi tempMain, low(RAMEND) ; stack pointer setup
+	out spl, tempMain
+	ldi tempMain, high(RAMEND)
+	out sph, tempMain
+
+	clr cursorPos
+
+	ldi tempMain, 0b00001000 ; keypad setup
+	sts DDRL, tempMain
+
+	ldi tempMain, (1 << CS50) ; timer 5B PWM setup
+	sts TCCR5B, tempMain 
+	ldi tempMain, (1 << WGM50)|(1 << COM5A1)
+	sts TCCR5A, tempMain
+
+	ldi tempMain, (0 << WGM01) | (0 << WGM00) ; timer overflow interrupt setup
+	out TCCR0A, tempMain
+	ldi tempMain, (0 << WGM02) | (0 << CS02) | (0 << CS01) | (1 << CS00)
+	out TCCR0B, tempMain
+	ldi tempMain, 1 << TOIE0
+	sts TIMSK0, tempMain
+
+	ldi tempMain, (2 << ISC10) | (2 << ISC00) ; push buttom interrupt setup
+	sts EICRA, tempMain
+	in tempMain, EIMSK
+	ori tempMain, (1 << INT0) | (1 << INT1)
+	out EIMSK, tempMain
+
+	ldi tempMain, (2 << ISC30) ; lazer interrupt setup
+	sts EICRA, tempMain
+	in tempMain, EIMSK
+	ori tempMain, (1 << INT3)
+	out EIMSK, tempMain
+	sei
+
+	ser tempMain ; LCD setup
+	out DDRF, tempMain
+	out DDRA, tempMain
+	clr tempMain
+	out PORTF, tempMain
+	out PORTA, tempMain
+	do_lcd_command 0b00111000 
+	delay 5
+	do_lcd_command 0b00111000 
+	delay 1
+	do_lcd_command 0b00111000 
+	do_lcd_command 0b00111000 
+	do_lcd_command 0b00001000 
+	do_lcd_command 0b00000001 
+	do_lcd_command 0b00000110
+	do_lcd_command 0b00001100 
+
+	delay 50
+	ser tempMain
+	out DDRC, tempMain
+	ldi tempMain, 0b11111111
+	out PORTC, tempMain
+	delay 50
+	ldi tempMain, 0b11100111
+	out PORTC, tempMain
+	delay 50
+	ldi tempMain, 0b11000011
+	out PORTC, tempMain
+	delay 50
+	ldi tempMain, 0b10000001
+	out PORTC, tempMain
+	delay 50
+	ldi tempMain, 0b00000000
+	out PORTC, tempMain
+	delay 50
+jmp main
+
+/*===========MAIN FUNCTION===========*/
+
+main:
+
+// system configuration
+call askStationNum
+
+
+	endLoop:
+	rjmp endLoop
+
+/*===========ASK FOR MAX STATION NUMBER SUBROUTINE===========*/
+askStationNum:
+ldi zl, low(inValid<<1)
+ldi zh, high(inValid<<1)
+ldi tempMain, 42
+call displayString
+ret
+
+/*===========DISPLAY STRING SUBROUTINE===========*/
+displayString:
+lpm tempSec, z+
+updateDisplay tempSec
+lpm tempSec, z+
+updateDisplay tempSec
+lpm tempSec, z+
+updateDisplay tempSec
+lpm tempSec, z+
+updateDisplay tempSec
+lpm tempSec, z+
+updateDisplay tempSec
+lpm tempSec, z+
+updateDisplay tempSec
+ret
