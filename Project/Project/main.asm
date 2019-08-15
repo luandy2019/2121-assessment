@@ -1,62 +1,55 @@
-/* **************************************************
- *           COMP2121 19T2 Assessment               * 
- *           ** Monorail Emulator **                *  
- *           Created: 16 August 2019                *
- *    Author : Andy Lu(z       ), Hao Sun(z5158176) * 
- * **************************************************
-*/
 .include "m2560def.inc"
 
-.def zero = r2
-.def one = r3
-.def cursorPos = r4
+/*===========REGISTER DECLARATIONS===========*/
 
+; Constant Registers
+.def one = r15
+.def zero = r14
+
+; Main Registers
 .def tempMain = r25
-.def tempSec = r24
+.def tempSec =r24
+.def cursorPos = r22
+.def storagePos = r21
+.def row = r20
+.def col = r19
+.def mask = r18
+
+; Custom Flag Registers
+.def invExpression = r2
+.def OVFOccured = r3
+
+; Global Registers
+.def mulRes_l = r0
+.def mulRes_h = r1
+
 
 /*===========VALUE DECLARATIONS===========*/
-
 .equ LCD_RS = 7
 .equ LCD_E = 6
 .equ LCD_RW = 5
 .equ LCD_BE = 4
+.equ PORTLDIR = 0b11110000
+.equ INITCOLMASK = 0b11101111
+.equ INITROWMASK = 0b00000001
+.equ ROWMASK = 0b00001111
 
-// interrupt total = 16,000,000 / (256 * prescalar)
-.equ intTotal = 6250 ; for 0.1s
-
-;.equ RPS0 = 0
-;.equ RPS20 = 20
-;.equ RPS40 = 42
-;.equ RPS60 = 83
-;.equ RPS80 = 132
-;.equ RPS100 = 255
-
-/*===========DATA SEGMENT===========*/
+/*===========DSEG===========*/
 
 .dseg
-
 .org 0x200
 stationNames: .byte 100
 travelTimes: .byte 10
 stopTime: .byte 1
 
+ASCIIStorage: .byte 2
 
 
-/*===========CODE SEGMENT===========*/
+/*===========CSEG===========*/
 
 .cseg
-
-testData: .dw "1234567890" ; 26 char
-inValid: .dw "Invalid, please try again." ; 26 char
-iniSNum: .dw "Please type the maximum number of stations" ; 42 char
-iniSName: .dw "Pleas type the name of station" ; 30 char
-iniSTravel1: .dw "The time from Station" ; 21 char
-iniSTravel2: .dw "to Station" ; 10 char
-iniSStop: .dw "The stop time of the monorail at any station is" ; 47 char
-iniFin: .dw "Now the configuration is complete. Please wait 5 seconds" ; 56 char
-
-.org 0x0
-jmp reset
+.org 0
+jmp RESET
 
 .org INT0addr
 ;jmp buttonRight
@@ -70,11 +63,10 @@ jmp reset
 .org OVF0addr
 ;jmp Timer0OVF
 
-
 /*===========DELAY MACRO===========*/
 
 .macro delay
-    push tempMain
+	push tempMain
 	push tempSec
 
 	clr zero
@@ -115,10 +107,29 @@ jmp reset
 	pop tempMain
 .endmacro
 
+/*===========MULTIPLICATION MACRO===========*/
+
+.macro multMacro ; max result - 2 bytes
+	push r15
+	push r14
+
+	ldi tempMain, @2
+	mul @1, tempMain
+	mov r14, r1
+	mov r15, r0
+	mul @0, tempMain
+	add r14, r0
+	mov @1, r15
+	mov @0, r14
+
+	pop r14
+	pop r15
+.endmacro
+
 /*===========BLINK MACRO===========*/
 
-.macro blink
-    push tempMain
+blink:
+	push tempMain
 	ldi tempMain, 0xff ;;;;;;;;;;;;;
 	out PORTC, tempMain
 	delay 250
@@ -132,12 +143,12 @@ jmp reset
 	out PORTC, tempMain
 	delay 250
 	pop tempMain
-.endmacro
+ret
 
 /*===========QUICK BLINK MACRO===========*/
 
-.macro quickBlink
-    push tempMain
+quickBlink:
+	push tempMain
 	ldi tempMain, 0xff ;;;;;;;;;;;;;
 	out PORTC, tempMain
 	delay 100
@@ -163,10 +174,9 @@ jmp reset
 	out PORTC, tempMain
 	delay 100
 	pop tempMain
-.endmacro
+ret
 
 /*===========PRESET LCD COMMANDS===========*/
-
 
 .macro do_lcd_command
 	ldi tempMain, @0
@@ -251,6 +261,8 @@ ret
 /*===========DISPLAY UPDATE MACRO===========*/
 
 .macro updateDisplay
+	push r16
+	mov r16, @0
 	push tempMain
 	ldi tempMain, 16
 	cp cursorPos, tempMain
@@ -259,8 +271,9 @@ ret
 	clearDisplay
 	skipClear:
 
-	do_lcd_data @0
+	do_lcd_data r16
 	inc cursorPos
+	pop r16
 .endmacro
 
 /*===========DISPLAY UPDATE WITH ASCII MACRO===========*/
@@ -277,64 +290,84 @@ ret
 	inc cursorPos
 .endmacro
 
-/*===========RESET SUBROUTINE===========*/
+/*===========CLEAR ASCII STORAGE MACRO===========*/
 
-reset:
-	ldi tempMain, low(RAMEND) ; stack pointer setup
+.macro clearASCIIStorage
+	ldi xl, low(ASCIIStorage)
+	ldi xh, high(ASCIIStorage)
+
+	st x+, zero
+	st x+, zero
+
+	clr storagePos
+.endmacro
+
+/*===========DISPLAY STRING SUBROUTINE===========*/
+
+displayString:
+	push r16
+	clr r16
+	mov r16, tempMain
+
+	clearDisplay
+
+	displayStringLoop:
+
+	lpm tempSec, z+
+	updateDisplay tempSec
+
+	delay 25 // TO BE MODIFIED
+
+	dec r16
+	out PORTC, r16 ;;;;;;;;;;;;
+	cpi r16, 0
+
+	breq skipDisplayStringLoop
+	jmp displayStringLoop
+	skipDisplayStringLoop:
+	pop r16
+ret
+
+/*===========MASTER RESET SUBROUTINE===========*/
+
+RESET:
+	ldi tempMain, low(RAMEND)
 	out spl, tempMain
 	ldi tempMain, high(RAMEND)
 	out sph, tempMain
 
-	clr cursorPos
-
-	ldi tempMain, 0b00001000 ; keypad setup
-	sts DDRL, tempMain
-
-	ldi tempMain, (1 << CS50) ; timer 5B PWM setup
-	sts TCCR5B, tempMain 
-	ldi tempMain, (1 << WGM50)|(1 << COM5A1)
-	sts TCCR5A, tempMain
-
-	ldi tempMain, (0 << WGM01) | (0 << WGM00) ; timer overflow interrupt setup
-	out TCCR0A, tempMain
-	ldi tempMain, (0 << WGM02) | (0 << CS02) | (0 << CS01) | (1 << CS00)
-	out TCCR0B, tempMain
-	ldi tempMain, 1 << TOIE0
-	sts TIMSK0, tempMain
-
-	ldi tempMain, (2 << ISC10) | (2 << ISC00) ; push buttom interrupt setup
-	sts EICRA, tempMain
-	in tempMain, EIMSK
-	ori tempMain, (1 << INT0) | (1 << INT1)
-	out EIMSK, tempMain
-
-	ldi tempMain, (2 << ISC30) ; lazer interrupt setup
-	sts EICRA, tempMain
-	in tempMain, EIMSK
-	ori tempMain, (1 << INT3)
-	out EIMSK, tempMain
-	sei
-
-	ser tempMain ; LCD setup
+//********************************
+	ser tempMain
 	out DDRF, tempMain
 	out DDRA, tempMain
 	clr tempMain
 	out PORTF, tempMain
 	out PORTA, tempMain
-	do_lcd_command 0b00111000 
-	delay 5
-	do_lcd_command 0b00111000 
-	delay 1
-	do_lcd_command 0b00111000 
-	do_lcd_command 0b00111000 
-	do_lcd_command 0b00001000 
-	do_lcd_command 0b00000001 
-	do_lcd_command 0b00000110
-	do_lcd_command 0b00001100 
 
-	delay 50
+	do_lcd_command 0b00111000 ; display setting
+	delay 5
+	do_lcd_command 0b00111000 ; display setting
+	delay 1
+	do_lcd_command 0b00111000 ; display setting
+	do_lcd_command 0b00111000 ; display setting
+	do_lcd_command 0b00001000 ; display on
+	do_lcd_command 0b00000001 ; clear display
+	do_lcd_command 0b00000110 ; increment, no display shift
+	do_lcd_command 0b00001100 ; cursor setting
+
+//********************************
+
+	ldi tempMain, PORTLDIR ; columns are outputs, rows are inputs
+	STS DDRL, tempMain     ; cannot use out
+
+	ldi tempMain, (0 << CS50) 
+	sts TCCR5B, tempMain 
+	ldi tempMain, (0 << WGM50)|(0 << COM5A1)
+	sts TCCR5A, tempMain
+
+//********************************
 	ser tempMain
-	out DDRC, tempMain
+	out DDRC, tempMain ; PORTC is all ouputs
 	ldi tempMain, 0b11111111
 	out PORTC, tempMain
 	delay 50
@@ -349,40 +382,306 @@ reset:
 	delay 50
 	ldi tempMain, 0b00000000
 	out PORTC, tempMain
-	delay 50
+
+//********************************
+	testData: .db "1234567890", 0, 0 ; 10 char
+	errorOcc: .db "Error occured, please try again.", 0, 0 ; 32 char
+	// Phase 1
+	iniSNum: .db "Please type the maximum number of stations", 0, 0 ; 42 char
+	// Phase 2
+	iniSName: .db "Pleas type the name of station", 0, 0 ; 30 char
+	// Phase 3
+	iniSTravel1: .db "The time from Station", 0 ; 21 char
+	iniSTravel2: .db "to Station", 0, 0 ; 10 char
+	// Phase 4
+	iniSStop: .db "The stop time of the monorail at any station is", 0 ; 47 char
+	iniFin: .db "Now the configuration is complete. Please wait 5 seconds", 0, 0 ; 56 char
+
+//********************************
+	clr zero
+	clr one
+	inc one
+	clr cursorPos
+	clr storagePos
+	clr invExpression
+	clr OVFOccured
+	clearASCIIStorage
 jmp main
+
 
 /*===========MAIN FUNCTION===========*/
 
 main:
 
-// system configuration
-call askStationNum
-
+	call phase1
+	phase1Completed:
 
 	endLoop:
+		ldi tempMain, 0xff ;;;;;;;;;;;;;
+		out PORTC, tempMain
+		delay 500
+;		ldi tempMain, 0 ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0xff ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0 ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0xff ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0 ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;
+;		ldi tempMain, 0xff ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 1500
+;		ldi tempMain, 0 ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0xff ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 1500
+;		ldi tempMain, 0 ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0xff ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 1500
+;		ldi tempMain, 0 ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;
+;		ldi tempMain, 0xff ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0 ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0xff ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0 ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0xff ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
+;		ldi tempMain, 0 ;;;;;;;;;;;;;
+;		out PORTC, tempMain
+;		delay 500
 	rjmp endLoop
 
 /*===========ASK FOR MAX STATION NUMBER SUBROUTINE===========*/
-askStationNum:
-ldi zl, low(inValid<<1)
-ldi zh, high(inValid<<1)
-ldi tempMain, 42
-call displayString
+
+phase1:
+	ldi zl, low(iniSNum<<1)
+	ldi zh, high(iniSNum<<1)
+	ldi tempMain, 42
+	call displayString
+	updateDisplayWithASCII ':'
+	updateDisplayWithASCII 32
+
+	call valueEnter
+
 ret
 
-/*===========DISPLAY STRING SUBROUTINE===========*/
-displayString:
-lpm tempSec, z+
-updateDisplay tempSec
-lpm tempSec, z+
-updateDisplay tempSec
-lpm tempSec, z+
-updateDisplay tempSec
-lpm tempSec, z+
-updateDisplay tempSec
-lpm tempSec, z+
-updateDisplay tempSec
-lpm tempSec, z+
-updateDisplay tempSec
+/*===========NUMBER-BASE VALUE ENTERING FUNCTION===========*/
+
+valueEnter:
+	ldi mask, INITCOLMASK
+	clr col
+
+	colloop:
+		STS PORTL, mask
+		ldi tempMain, 255
+
+		delayMain:
+			dec tempMain
+			brne delayMain
+
+	LDS tempMain, PINL 
+	andi tempMain, ROWMASK 
+	cpi tempMain, 0b00001111
+	brne rowNotPushed 
+	jmp nextcol
+	rowNotPushed:
+
+	ldi mask, INITROWMASK
+	clr row 
+
+	rowloop:
+		mov tempSec, tempMain
+		and tempSec, mask
+		breq isEqual
+		jmp skipconv
+		isEqual:
+		call convert 
+
+	delay 250
+	jmp valueEnter
 ret
+
+/*===========NUMBER-BASE KEYPAD COMMANDS===========*/
+
+skipconv:
+	inc row
+	lsl mask 
+jmp rowloop
+
+nextcol:     
+	cpi col, 3
+	brne colNotPushed
+	jmp valueEnter
+	colNotPushed:
+	sec
+	rol mask
+	inc col
+jmp colloop
+
+convert:
+	cpi col, 3
+	breq letters
+	cpi row, 3
+	breq symbols
+	mov tempMain, row 
+	lsl tempMain
+	add tempMain, row
+	add tempMain, col
+	ldi tempSec, 49
+	add tempMain, tempSec
+
+jmp convert_end
+
+letters:
+	mov tempMain, row
+	cpi tempMain, 0
+	breq AChar
+	cpi tempMain, 1
+	breq BChar
+	cpi tempMain, 2
+	breq CChar
+	ldi tempMain, 'D'
+	clr invExpression
+	inc invExpression
+jmp convert_end
+
+AChar:
+	ldi tempMain, 'A'
+	clr invExpression
+	inc invExpression
+jmp convert_end
+
+BChar:
+	ldi tempMain, 'B'
+	clr invExpression
+	inc invExpression
+jmp convert_end
+
+CChar:
+jmp phase1End
+
+symbols:
+	cpi col, 0
+	breq star
+	cpi col, 1
+	breq zeroChar
+	ldi tempMain, '#'
+	clr invExpression
+	inc invExpression
+jmp convert_end
+
+star:
+	ldi tempMain, '*'
+	clr invExpression
+	inc invExpression
+jmp convert_end
+
+zeroChar:
+	ldi tempMain, '0'
+
+convert_end:
+	updateDisplay tempMain
+	call storeKeyPadVal
+ret
+
+/*===========NUMBER-BASE STORE KEYPAD VAL===========*/
+
+storeKeyPadVal:
+	ldi xl, low(ASCIIStorage)
+	ldi xh, high(ASCIIStorage)
+
+	out PORTC, storagePos
+
+	add xl, storagePos
+
+	st x+, tempMain
+
+	inc storagePos
+	cpi storagePos, 3
+	brsh charOVF
+	jmp noCharOVF
+	charOVF:
+	clr OVFOccured
+	inc OVFOccured
+	noCharOVF:
+ret
+
+/*===========NUMBER-BASE END===========*/
+
+phase1End:
+	push r16
+	push r17
+	cp OVFOccured, zero
+	brne overflowed
+	jmp notOverflowed
+	overflowed:
+	jmp displayError
+	notOverflowed:
+
+	cp invExpression, zero
+	brne notValid
+	jmp notInvalid
+	notValid:
+	jmp displayError
+	notInvalid:
+
+	ldi xl, low(ASCIIStorage) 
+	ldi xh, high(ASCIIStorage)
+
+	cp storagePos, one
+	breq sinInt
+	jmp notSinInt
+	sinInt:
+
+	ld r16, x+
+	
+
+	notSinInt
+
+	ld r16, x+
+	ld r17, x+
+
+	;call quickBlink
+
+	out PORTC, tempMain
+
+	delay 10000
+	pop r17
+	pop r16
+jmp phase1Completed
+
+/*===========NUMBER-BASE ERROR SUBROUTINE===========*/
+
+displayError:
+	ldi zl, low(errorOcc<<1)
+	ldi zh, high(errorOcc<<1)
+	ldi tempMain, 32
+	call displayString
+	clr OVFOccured
+	clr invExpression
+	call quickBlink
+jmp phase1
