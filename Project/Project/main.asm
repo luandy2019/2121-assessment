@@ -74,6 +74,12 @@ jmp reset
 /*===========DELAY MACRO===========*/
 
 .macro delay
+    push tempMain
+	push tempSec
+
+	clr zero
+	clr one
+	inc one
 
 	clr tempMain
 	clr tempSec
@@ -83,7 +89,7 @@ jmp reset
 
 	delayLoop:
 		sub tempSec, one
-		sbc tempMain, zero
+		sbc tempMain,zero
 
 		push tempMain
 		push tempSec
@@ -104,11 +110,15 @@ jmp reset
 		cp tempMain, zero
 		cpc tempSec, zero
 		brne delayLoop
+
+	pop tempSec
+	pop tempMain
 .endmacro
 
 /*===========BLINK MACRO===========*/
 
 .macro blink
+    push tempMain
 	ldi tempMain, 0xff ;;;;;;;;;;;;;
 	out PORTC, tempMain
 	delay 250
@@ -121,11 +131,13 @@ jmp reset
 	ldi tempMain, 0 ;;;;;;;;;;;;;
 	out PORTC, tempMain
 	delay 250
+	pop tempMain
 .endmacro
 
 /*===========QUICK BLINK MACRO===========*/
 
 .macro quickBlink
+    push tempMain
 	ldi tempMain, 0xff ;;;;;;;;;;;;;
 	out PORTC, tempMain
 	delay 100
@@ -150,6 +162,7 @@ jmp reset
 	ldi tempMain, 0 ;;;;;;;;;;;;;
 	out PORTC, tempMain
 	delay 100
+	pop tempMain
 .endmacro
 
 /*===========PRESET LCD COMMANDS===========*/
